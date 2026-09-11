@@ -6,6 +6,10 @@ bin_cgi/
 logs/
 *.log
 
+# 本地/部署配置（包含数据库、网络和 API 凭据）
+conf/cfg.json
+docker/fastcgi_app/cfg.json
+
 # 前端构建产物（Docker build 时会重新生成）
 picture_bed/build/
 picture_bed/node_modules/
