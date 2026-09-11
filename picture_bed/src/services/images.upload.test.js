@@ -23,6 +23,7 @@ describe('uploadImage - ordinary upload', () => {
     };
   });
 
+  // 验证需求 R-04：MD5 未命中时，请求顺序必须是 md5 检测 → 普通上传，且 FormData 字段完整。
   test('TC-M-001: MD5 未命中时应先检测再上传文件实体', async () => {
     global.fetch = jest.fn()
       .mockResolvedValueOnce({ json: jest.fn().mockResolvedValue({ code: 1 }) })
@@ -45,6 +46,7 @@ describe('uploadImage - ordinary upload', () => {
     expect(progress).toHaveBeenLastCalledWith(100);
   });
 
+  // 验证需求 R-05：服务端确认文件可复用时，只返回秒传结果，不再发送 /api/upload 文件实体。
   test('TC-M-003: 秒传命中时不应上传文件实体', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       json: jest.fn().mockResolvedValue({ code: 0 }),
@@ -57,6 +59,7 @@ describe('uploadImage - ordinary upload', () => {
     expect(global.fetch).toHaveBeenCalledWith('/api/md5', expect.objectContaining({ method: 'POST' }));
   });
 
+  // 验证需求 R-06：同一用户重复上传时返回 alreadyExists，避免重复建立文件关联。
   test('TC-M-005: 已存在于当前用户时返回重复文件结果', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       json: jest.fn().mockResolvedValue({ code: 5 }),
@@ -69,6 +72,7 @@ describe('uploadImage - ordinary upload', () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
+  // 验证需求 R-11：后端返回 token 失效码时，前端转换为 tokenExpired 供页面退出登录和提示。
   test('TC-S-002: token 失效时抛出 tokenExpired 错误', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       json: jest.fn().mockResolvedValue({ code: 4 }),

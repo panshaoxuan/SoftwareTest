@@ -22,6 +22,7 @@ describe('uploadChunked', () => {
     };
   });
 
+  // 验证需求 R-03/R-07 的阈值边界：当前实现仅对大于 10 MB 的文件启用分片，恰好 10 MB 仍走普通上传。
   test('TC-B-002: 恰好 10 MB 文件走普通上传', async () => {
     global.fetch = jest.fn()
       .mockResolvedValueOnce({ json: jest.fn().mockResolvedValue({ code: 1 }) })
@@ -32,6 +33,7 @@ describe('uploadChunked', () => {
     expect(global.fetch.mock.calls.map(([url]) => url)).toEqual(['/api/md5', '/api/upload']);
   });
 
+  // 验证需求 R-07：大文件必须按 init → 多个 chunk_upload → chunk_merge 的完整顺序执行，并报告进度。
   test('TC-B-003/TC-C-001: 超过 10 MB 时执行 init、逐片上传和 merge', async () => {
     global.fetch = jest.fn()
       // md5 未命中
@@ -61,6 +63,7 @@ describe('uploadChunked', () => {
     expect(progress).toHaveBeenLastCalledWith(100);
   });
 
+  // 验证需求 R-08：断点续传时解析服务端已上传索引，只补传缺失分片，然后继续合并。
   test('TC-C-004: 初始化返回已上传分片时跳过这些分片', async () => {
     global.fetch = jest.fn()
       .mockResolvedValueOnce({ json: jest.fn().mockResolvedValue({ code: 1 }) })
@@ -77,6 +80,7 @@ describe('uploadChunked', () => {
     expect(urls).toContain('/api/chunk_merge');
   });
 
+  // 验证需求 R-10：任一分片失败时立即终止后续流程并抛出可识别错误，不能误调用 merge。
   test('TC-C-009: 分片上传失败时停止流程并抛出错误', async () => {
     global.fetch = jest.fn()
       .mockResolvedValueOnce({ json: jest.fn().mockResolvedValue({ code: 1 }) })
