@@ -1,0 +1,18 @@
+------WebKitFormBoundaryTESTBOUNDARY
+Content-Disposition: form-data; name="file"; filename="../escaped_by_upload.txt"
+Content-Type: application/octet-stream
+
+pwn
+------WebKitFormBoundaryTESTBOUNDARY
+Content-Disposition: form-data; name="user"
+
+alice
+------WebKitFormBoundaryTESTBOUNDARY
+Content-Disposition: form-data; name="md5"
+
+x
+------WebKitFormBoundaryTESTBOUNDARY
+Content-Disposition: form-data; name="size"
+
+3
+------WebKitFormBoundaryTESTBOUNDARY--

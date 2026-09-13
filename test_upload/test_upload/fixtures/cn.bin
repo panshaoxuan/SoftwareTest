@@ -1,0 +1,18 @@
+------WebKitFormBoundaryTESTBOUNDARY
+Content-Disposition: form-data; name="file"; filename="我的 文档-1.txt"
+Content-Type: application/octet-stream
+
+abc
+------WebKitFormBoundaryTESTBOUNDARY
+Content-Disposition: form-data; name="user"
+
+alice
+------WebKitFormBoundaryTESTBOUNDARY
+Content-Disposition: form-data; name="md5"
+
+0cc175b9c0f1b6a831c399e269772661
+------WebKitFormBoundaryTESTBOUNDARY
+Content-Disposition: form-data; name="size"
+
+3
+------WebKitFormBoundaryTESTBOUNDARY--
