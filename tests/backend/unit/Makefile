@@ -7,23 +7,36 @@ CPPFLAGS := -include sys/ipc.h -include ctype.h \
             -I/usr/include/mysql -I/usr/local/include
 CFLAGS := -Wall -Wextra -std=gnu11 -ffunction-sections -fdata-sections
 LDFLAGS := -Wl,--gc-sections
+LDLIBS := -lfcgi
 
-TARGET := test_buffer_search
+BUFFER_TARGET := test_buffer_search
+MULTIPART_TARGET := test_recv_save_file
+TARGETS := $(BUFFER_TARGET) $(MULTIPART_TARGET)
 UPLOAD_OBJECT := upload_cgi_testable.o
 
-.PHONY: all test clean
+.PHONY: all test test-buffer test-multipart clean
 
-all: $(TARGET)
+all: $(TARGETS)
 
 $(UPLOAD_OBJECT): $(PROJECT_ROOT)/src_cgi/upload_cgi.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Dmain=upload_cgi_main -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -D_LOG -Dmain=upload_cgi_main -c $< -o $@
 
-$(TARGET): test_buffer_search.c $(UPLOAD_OBJECT) mini_test.h
+$(BUFFER_TARGET): test_buffer_search.c $(UPLOAD_OBJECT) mini_test.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) test_buffer_search.c $(UPLOAD_OBJECT) \
 		$(LDFLAGS) -o $@
 
-test: $(TARGET)
-	./$(TARGET)
+$(MULTIPART_TARGET): test_recv_save_file.c multipart_fixture.c \
+		$(UPLOAD_OBJECT) mini_test.h multipart_fixture.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) test_recv_save_file.c multipart_fixture.c \
+		$(UPLOAD_OBJECT) $(LDFLAGS) $(LDLIBS) -o $@
+
+test-buffer: $(BUFFER_TARGET)
+	./$(BUFFER_TARGET)
+
+test-multipart: $(MULTIPART_TARGET)
+	./$(MULTIPART_TARGET)
+
+test: test-buffer test-multipart
 
 clean:
-	rm -f $(TARGET) $(UPLOAD_OBJECT)
+	rm -f $(TARGETS) $(UPLOAD_OBJECT)
