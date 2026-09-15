@@ -383,7 +383,7 @@ ASAN_OPTIONS=detect_leaks=0:intercept_strstr=0 ./test_recv_save_file_sanitize
 | 阶段 4 统计 | 5 OK / 10 NG | **4 OK / 11 NG** |
 | UT-MP-019 | 假通过（OK） | **NG，SEGV** |
 | 其余用例 | — | 判定不变 |
-| 普通构建与 Sanitizer 构建的一致性 | 结论相反 | **逐用例完全一致** |
+| 普通构建与 Sanitizer 构建的关系 | 结论相反（夹具所致） | 不再矛盾：关闭 `strstr` 拦截的一轮逐用例判定与普通构建一致；开启拦截的一轮额外报告 UT-MP-007/012/020a 的潜在越界，并把 UT-MP-024 由 PASS 变 FAIL。**三种运行的 PASS 数（13 / 10 / 12）口径不同，不可合并** |
 
 该缺陷同时暴露了业务源码的 DEF-MP-007（`fread()` 返回值被截断、短读后继续使用未初始化缓冲区）。
 
