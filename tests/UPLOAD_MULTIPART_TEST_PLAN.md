@@ -1,8 +1,8 @@
 # 文件上传模块自动化测试全程规划
 
-> 文档版本：0.3  
+> 文档版本：0.4  
 > 编制日期：2026-09-15  
-> 最近更新：2026-09-15（阶段 4 收口：批次 A/B/C 全部完成，15 条用例 5 OK / 10 NG）  
+> 最近更新：2026-09-15（阶段 5 收口：修正 C 单元测试输入通路，阶段 4 统计修正为 4 OK / 11 NG，新增 4 条 strncpy 家族用例）  
 > 当前分支：`feat/cgi-upload-tests`  
 > 测试对象：前端上传服务、`buffer_search()`、`recv_save_file()` 及后续上传接口  
 > 测试目录：`picture_bed/src/services/`、`picture_bed/src/test/helpers/`、`tests/backend/unit/`
@@ -36,8 +36,8 @@
 | 阶段 1 | 编写前端上传逻辑 Jest 单元测试 | 已完成 | 2 个测试文件、3 个 helper、8 条测试 |
 | 阶段 2 | 建立 C 测试基础设施并测试 `buffer_search()` | 已完成 | `mini_test.h`、Makefile、6 条测试 |
 | 阶段 3 | 构造合法 multipart 报文并测试正常解析 | 已完成 | fixture、`test_recv_save_file.c`、5 条测试 |
-| 阶段 4 | 测试畸形 multipart、长度边界和路径安全 | **已完成**（批次 A/B/C 全部完成） | UT-MP-006～UT-MP-020、5 个缺陷 |
-| 阶段 5 | 使用 Sanitizer 执行内存安全检查并回归 | 进行中（构建目标已完成，分析待做） | Sanitizer 日志、回归结果 |
+| 阶段 4 | 测试畸形 multipart、长度边界和路径安全 | 已完成（批次 A/B/C 全部完成） | UT-MP-006～UT-MP-020、5 个缺陷 |
+| 阶段 5 | 使用 Sanitizer 执行内存安全检查并回归 | **已完成**（发现并修复测试夹具输入通路缺陷，新增 4 条用例） | Sanitizer 逐用例报告、DEF-MP-006/007 |
 | 阶段 6 | Docker 中执行 CGI/API 和数据一致性测试 | 环境就绪后实施 | 接口脚本、数据库及文件断言 |
 | 阶段 7 | 汇总质量度量并完成课程交付文档 | 持续更新 | 用例清单、缺陷报告、测试报告 |
 
@@ -261,19 +261,21 @@ npm test -- --watchAll=false --runInBand --testPathPattern="images.(upload|chunk
 | UT-MP-016 | 1000 字符超长文件名 | `stack smashing detected`，signal 6 | NG | DEF-MP-003 |
 | UT-MP-017 | 文件名包含 `../` | 未返回 -1，在测试沙箱父目录生成文件（rc=2） | NG | DEF-MP-004 |
 | UT-MP-018 | 文件内容包含 boundary 字节 | 合法报文被返回 -1 拒绝（rc=1） | NG | DEF-MP-005 |
-| UT-MP-019 | `user/md5/size` 字段顺序变化 | 明确拒绝，进程未崩溃，无残留 | OK | — |
+| UT-MP-019 | `user/md5/size` 字段顺序变化 | 字段乱序导致 `p4` 查找失败，随后 SIGSEGV（阶段 5 修正，见 10.6） | NG | DEF-MP-001 |
 | UT-MP-020 | 报文在不同位置被截断 | 开头截断安全拒绝；文件内容处与 `size` 值处截断均 SIGSEGV | NG | DEF-MP-001 |
 
 #### 9.4.3 统计
 
 | 范围 | OK | POK | NG | 合计 |
 |---|---|---|---|---|
-| **阶段 4（UT-MP-006～020）** | **5** | 0 | **10** | **15** |
-| 累计（UT-MP-001～020） | 9 | 1 | 10 | 20 |
+| 阶段 4（UT-MP-006～020） | 4 | 0 | 11 | 15 |
+| 累计（UT-MP-001～020） | 8 | 1 | 11 | 20 |
 
-测试框架断言（`test_recv_save_file` 普通构建）：PASS 13 / FAIL 11 / TOTAL 24。断言数与业务用例数不等价：UT-MP-015 与 UT-MP-020 各展开为 3 个隔离断言。
+> **阶段 5 修正说明**：上表是修正后的数字。阶段 4 收口时曾记为 5 OK / 10 NG，其中 UT-MP-019 判为 OK；阶段 5 发现测试夹具的输入通路从未生效（见 10.1），修复后 UT-MP-019 实际会 SIGSEGV，故改为 NG。
 
-阶段 4 的 10 条 NG 归并为 5 个缺陷：DEF-MP-001（7 条）、DEF-MP-002（1 条）、DEF-MP-003（1 条）、DEF-MP-004（1 条）、DEF-MP-005（1 条）。详细定级见 `tests/UPLOAD_DEFECT_LIST.md`。
+测试框架断言（`test_recv_save_file` 普通构建）：PASS 13 / FAIL 11 / TOTAL 24（阶段 4 收口时）。断言数与业务用例数不等价：UT-MP-015 与 UT-MP-020 各展开为 3 个隔离断言。
+
+阶段 4 的 11 条 NG 归并为 5 个缺陷：DEF-MP-001（7 条）、DEF-MP-002（1 条）、DEF-MP-003（1 条）、DEF-MP-004（1 条）、DEF-MP-005（1 条）。详细定级见 `tests/UPLOAD_DEFECT_LIST.md`。
 
 #### 9.4.4 测试实现自查与临时文件清理
 
@@ -289,7 +291,7 @@ npm test -- --watchAll=false --runInBand --testPathPattern="images.(upload|chunk
 
 执行后复查容器：`/tmp/upload_cgi_*` 沙箱目录、`/tmp/escaped_by_upload_test.txt`、测试目录下的 `request.bin`／`bad.bin`／`boundary-content.bin` 均无残留；改用固定沙箱后，即使 Sanitizer 中止子进程也不再产生残留。清理仅针对测试自身创建的明确路径，未使用递归删除。即使子进程被信号终止，父进程仍会按固定路径回收沙箱。
 
-## 10. 阶段 5：内存安全与回归
+## 10. 阶段 5：内存安全与回归（已完成）
 
 ### 10.1 检查目标
 
@@ -299,42 +301,91 @@ npm test -- --watchAll=false --runInBand --testPathPattern="images.(upload|chunk
 - 整数溢出和其他未定义行为；
 - 测试进程异常退出或被信号终止。
 
-### 10.2 执行原则
-
-阶段 4 已为 Docker/Linux 编译环境建立**独立的** Sanitizer 构建目标，不改动 `src_cgi/` 下的业务源码：
+### 10.2 执行方式
 
 ```bash
 cd /app/tests/backend/unit
 make sanitize                  # 构建 test_buffer_search_sanitize 与 test_recv_save_file_sanitize
-make test-multipart-sanitize   # 单独执行 multipart 的 Sanitizer 版本
 make test-sanitize             # 执行两个 Sanitizer 目标
+make analyze                   # 观测 recv_save_file 的可观测行为
+make probe                     # 观测 libfcgi 输入通路
+
+# 逐用例分析（关掉 ASan 的 SIGSEGV 处理器，避免其自循环刷爆日志）
+ASAN_OPTIONS=detect_leaks=0:handle_segv=0 UBSAN_OPTIONS=print_stacktrace=1 \
+  ./test_recv_save_file_sanitize
+# 只保留真实故障（使用 libc 真正的 strstr）
+ASAN_OPTIONS=detect_leaks=0:intercept_strstr=0 ./test_recv_save_file_sanitize
 ```
 
-编译选项为：
+编译选项 `-fsanitize=address,undefined -fno-omit-frame-pointer -g`，使用独立的 object 与二进制，与普通构建完全分离。
 
-```text
--fsanitize=address,undefined -fno-omit-frame-pointer -g
-```
+**运行注意事项（复现时务必遵守）**：ASan 默认的 SIGSEGV 处理器在本项目上会进入 `AddressSanitizer:DEADLYSIGNAL` 自循环，曾把日志瞬时写到 14 GB。运行时应加 `handle_segv=0`，并给输出重定向加长度上限。
 
-Sanitizer 构建使用独立的 object（`upload_cgi_testable_sanitize.o`）和独立的二进制，与普通构建完全分离，避免插桩污染日常回归使用的测试程序；`make clean` 会同时清理两类产物。
+### 10.3 完整结果
 
-阶段 4 只要求 Sanitizer 目标**能够正确构建**，完整的内部分析、定位和修复后回归属于阶段 5。阶段 4 收口时执行过一次预览运行，结果记录在 `tests/backend/unit/results/raw_sanitize_preview_20260915.log`：24 / 24 个隔离子进程均被 AddressSanitizer 以 `heap-buffer-overflow` 中止，分配点为 `upload_cgi.c:230`、使用点为 `upload_cgi.c:261`，属于业务源码问题（缓冲区缺少 NUL 终止符），已登记为 DEF-MP-006。由于每个子进程在第一处报告后即中止，该预览结果**不能**替代普通构建的用例判定。
+完整证据见 `tests/backend/unit/results/multipart_stage5_20260915.log`，逐用例结论见下表。
 
-### 10.3 五项检查的完整化
+| 用例 | ASan 分类 | 位置 | 判定 |
+|---|---|---|---|
+| UT-MP-001～005 | 无报告 | — | OK / POK |
+| UT-MP-006 | SEGV（真实故障） | `:302` | NG |
+| UT-MP-007 | 潜在 heap-buffer-overflow | `:369` | NG |
+| UT-MP-008、009 | SEGV（真实故障） | `:302` | NG |
+| UT-MP-010 | SEGV（真实故障） | `:313` | NG |
+| UT-MP-011 | SEGV（真实故障） | `:328` | NG |
+| UT-MP-012 | 潜在 heap-buffer-overflow | `:336` | OK |
+| UT-MP-013～015 | 无报告 | — | OK |
+| UT-MP-016 | stack-buffer-overflow | `:303` | NG |
+| UT-MP-017 | 无报告（逻辑缺陷） | — | NG |
+| UT-MP-018 | 无报告（逻辑缺陷） | — | NG |
+| UT-MP-019 | SEGV（真实故障） | `:328` | NG |
+| UT-MP-020a | 潜在 heap-buffer-overflow | `:275` | OK |
+| UT-MP-020b | SEGV（真实故障） | `:309` | NG |
+| UT-MP-020c | heap-buffer-overflow | `:352` | NG |
+| UT-MP-021 | stack-buffer-overflow | `:270` | NG |
+| UT-MP-022 | stack-buffer-overflow | `:320` | NG |
+| UT-MP-023 | stack-buffer-overflow | `:330` | NG |
+| UT-MP-024 | stack-buffer-overflow | `:352` | NG（普通断言看不出） |
 
-阶段 5 需要在普通构建结论的基础上，补充：
+- 越界读写与栈缓冲区破坏均有实证；UBSan 未报告任何整数溢出；未发现 use-after-free。
+- 所有报告都指向 `src_cgi/upload_cgi.c`，是业务源码问题。
+- 关掉 ASan 的 `strstr` 前置检查后仍有 7 条用例真实 SIGSEGV，证明 DEF-MP-006 的越界读不是插桩假象。
+- UT-MP-024 在普通构建下返回 -1、无残留，**只有 Sanitizer 能发现**它写越界了 `size_text`——这正是"普通断言通过但存在内存问题"的实例。
 
-- 逐个用例记录 Sanitizer 报告的分类和源码位置；
-- 确认 DEF-MP-006 与 DEF-MP-001 的因果关系（修复缓冲区终止符后重新统计崩溃用例）；
-- 确认 `strncpy()` 系列无长度上限拷贝（`boundary`／`user`／`md5`／`size_text`）是否触发栈缓冲区溢出；
-- 将阶段 4 判为 OK 的用例（UT-MP-012～015、019）在 Sanitizer 下重新判定，防止"普通断言通过但存在内存问题"。
+### 10.4 阶段 5 新增用例
 
-### 10.4 零字节文件决策
+为验证 `recv_save_file()` 中四处无长度上限的 `strncpy()`，新增 UT-MP-021～024：
 
-在本阶段确认 R-03 的产品规则：
+| 用例ID | 场景 | 目标缓冲区 | 关联缺陷 |
+|---|---|---|---|
+| UT-MP-021 | boundary 首行 606 字符 | `boundary[512]` | DEF-MP-003 |
+| UT-MP-022 | `user` 值 200 字符 | `user[128]` | DEF-MP-003 |
+| UT-MP-023 | `md5` 值 400 字符 | `md5[256]` | DEF-MP-003 |
+| UT-MP-024 | `size` 文本 100 字符 | `size_text[65]` | DEF-MP-003 |
 
-- 若禁止零字节文件：`UT-MP-004` 固定预期为“返回失败且无残留”，状态由 POK 改为 OK；
+四条全部触发栈缓冲区溢出。其中 UT-MP-022 未触发栈保护，而是静默改写相邻的 `filename` 缓冲区，使被测函数用**被改写的名字**创建文件——说明不能只依赖栈保护发现这类问题。
+
+### 10.5 零字节文件决策
+
+仍待产品侧确认 R-03 规则，`UT-MP-004` 保持 POK：
+
+- 若禁止零字节文件：`UT-MP-004` 固定预期为"返回失败且无残留"，状态由 POK 改为 OK；
 - 若允许零字节文件：固定预期为成功解析和生成 0 字节文件，当前行为作为候选缺陷进一步复现。
+
+### 10.6 阶段 5 对阶段 4 结论的修正
+
+阶段 5 发现并修复了一处**测试夹具**缺陷（登记为 TEST-MP-001）：`upload_cgi.c` 经 `fcgi_stdio.h` 的宏替换后调用的是 `FCGI_fread(..., &_fcgi_sF[0])`，而测试进程中该包装未初始化，**被测函数从未真正读取报文**，此前用例是在复用的堆内存上碰巧得到正确报文才通过的。
+
+修复后（只改夹具，不改业务源码）：
+
+| 项目 | 修复前 | 修复后 |
+|---|---|---|
+| 阶段 4 统计 | 5 OK / 10 NG | **4 OK / 11 NG** |
+| UT-MP-019 | 假通过（OK） | **NG，SEGV** |
+| 其余用例 | — | 判定不变 |
+| 普通构建与 Sanitizer 构建的一致性 | 结论相反 | **逐用例完全一致** |
+
+该缺陷同时暴露了业务源码的 DEF-MP-007（`fread()` 返回值被截断、短读后继续使用未初始化缓冲区）。
 
 ## 11. 阶段 6：CGI/API 与数据一致性测试
 
@@ -406,7 +457,22 @@ make test              # 执行当前全部 C 单元测试
 | 新问题完成复现、定级与矩阵映射 | 满足 | `UPLOAD_DEFECT_LIST.md` 中 DEF-MP-003/004/005，并完善 001/002 |
 | 用例清单同步更新 | 满足 | `docs/附录1：文件上传模块测试用例清单.xlsx` 已加入 UT-MP-006～020 及当前状态 |
 
-阶段 4 结论：**已完成**。15 条用例中 5 条 OK、10 条 NG，10 条 NG 归并为 5 个缺陷；既有 UT-BS-001～006 与 UT-MP-001～005 无回归；未修改任何业务源码。
+阶段 4 结论：**已完成**。修正后的统计为 15 条用例中 4 条 OK、11 条 NG，11 条 NG 归并为 5 个缺陷；既有 UT-BS-001～006 与 UT-MP-001～005 无回归；未修改任何业务源码。（阶段 4 收口时曾记为 5 OK / 10 NG，阶段 5 修正了 UT-MP-019，详见 10.6。）
+
+### 13.2 阶段 5 验收结论（2026-09-15）
+
+| 验收项 | 结论 | 依据 |
+|---|---|---|
+| 逐用例记录 Sanitizer 报告的分类和源码位置 | 满足 | `multipart_stage5_20260915.log` 第 5.1、5.2 节，19 条用例逐条给出类型与行号 |
+| 区分"真实越界"与"契约违例" | 满足 | 用 `intercept_strstr=0`（libc 真正的 `strstr`）复跑，仍有 7 条真实 SIGSEGV |
+| 确认 DEF-MP-006 与 DEF-MP-001 的因果关系 | 满足 | 全部 heap 报告分配点均为 `:230`；SEGV 点为独立的空指针解引用 |
+| 验证 `strncpy()` 家族是否溢出 | 满足 | 新增 UT-MP-021～024，四处全部触发 stack-buffer-overflow |
+| 阶段 4 判 OK 的用例重新判定 | 满足 | UT-MP-012 记录潜在越界；UT-MP-019 由假通过改为 NG；UT-MP-024 由普通断言漏检改为 NG |
+| 测试夹具可信 | 满足 | 修复输入通路后发现并修正测试侧缺陷 TEST-MP-001，修复后普通构建与 Sanitizer 构建逐用例一致 |
+| 新增缺陷完成复现与定级 | 满足 | `UPLOAD_DEFECT_LIST.md` 新增 DEF-MP-007、TEST-MP-001，并给出 DEF-MP-001/003/006 的精确位置 |
+| 容器无残留 | 满足 | 见 `multipart_stage5_20260915.log` 第 7 节 |
+
+阶段 5 结论：**已完成**。阶段 5 新增 4 条用例全部为 NG；阶段 4 统计修正为 4 OK / 11 NG；被测源码 `src_cgi/upload_cgi.c` 全程未修改。
 
 ## 14. 阶段 7：质量度量与交付物更新
 
@@ -433,12 +499,18 @@ make test              # 执行当前全部 C 单元测试
 
 ## 15. 下一步动作
 
-阶段 4（批次 A/B/C）已全部完成。下一步进入**阶段 5：Sanitizer 内存安全分析**：
+阶段 4 与阶段 5 均已收口。下一步进入**阶段 6：CGI/API 与数据一致性测试**，同时有两项前置事项需要先确认：
 
-1. 使用已有的 `make sanitize` 目标，逐用例收集 AddressSanitizer 与 UndefinedBehaviorSanitizer 的完整报告，保存为阶段 5 证据文件；
-2. 优先分析 DEF-MP-006（`file_buf` 缺少 NUL 终止符导致 `strstr()` 越界读）。该问题对正常报文同样触发，且很可能是 DEF-MP-001 多个 SIGSEGV 的公共诱因；
-3. 验证 DEF-MP-003 所述 `strncpy()` 系列无长度上限拷贝（`boundary`／`user`／`md5`／`size_text`）是否同样触发栈缓冲区溢出；
-4. 将阶段 4 判为 OK 的用例（UT-MP-012～015、UT-MP-019）在 Sanitizer 下重新判定；
-5. 在阶段 5 结论中确认 DEF-MP-003／004／006 的最终严重程度。
+1. **需求确认**：R-03 零字节文件规则（决定 UT-MP-004 由 POK 定为 OK 还是转为缺陷）；
+2. **修复后回归**：DEF-MP-001／002／003／004／006／007 修复后，用现有用例集重新执行 `make test` 与 `make test-sanitize`，确认由 NG 转为 OK，并检查是否有新问题暴露（DEF-MP-006 修复后 DEF-MP-001 的崩溃用例是否仍然崩溃，用于验证因果判断）。
 
-阶段 5 的输入条件：Sanitizer 构建目标已就绪（`Makefile` 的 `sanitize`、`test-sanitize`、`test-multipart-sanitize`），预览运行结果见 `tests/backend/unit/results/raw_sanitize_preview_20260915.log`。
+阶段 6 的计划（沿用第 11 节）需要真实 Docker 服务与数据库：
+
+- 正常小文件上传及响应 JSON；
+- 无 token、过期 token 和用户不匹配；
+- 中文文件名、零字节文件和非法文件名；
+- 畸形 multipart 请求后的服务存活性；
+- 上传成功后的文件可读性、上传失败后的临时文件清理；
+- 数据库可用后补充 `file_info`、`user_file_list` 和 FastDFS 一致性断言。
+
+阶段 5 的执行方法（探针、`intercept_strstr=0` 的两轮对比、`handle_segv=0` 与输出上限）在阶段 6 排查服务侧问题时同样适用。

@@ -1,21 +1,26 @@
 # 文件上传模块缺陷清单
 
-> 当前证据基线：`feat/cgi-upload-tests`（工作区基线提交 `99341ab`，本轮测试改动尚未提交）
-> 最近更新：2026-09-15（阶段 4 收口）
+> 当前证据基线：`feat/cgi-upload-tests`
+> 最近更新：2026-09-15（阶段 5 内存安全分析收口）
 > 本清单仅记录在当前本地 Docker 环境中复现的问题。
-> 阶段 4 完整证据：`tests/backend/unit/results/multipart_stage4_20260915.log`
-> 缺陷总览：DEF-MP-001（高）、DEF-MP-002（中）、DEF-MP-003（严重）、DEF-MP-004（严重）、DEF-MP-005（中）、DEF-MP-006（严重，阶段 5 待完整确认）
+> 阶段 4 证据：`tests/backend/unit/results/multipart_stage4_20260915.log`
+> 阶段 5 证据：`tests/backend/unit/results/multipart_stage5_20260915.log`
+> 被测源码 `src_cgi/upload_cgi.c` 全程未修改。
 
 ## 总览
 
 | 缺陷ID | 摘要 | 严重程度 | 优先级 | 关联用例 |
 |---|---|---|---|---|
-| DEF-MP-001 | 畸形 multipart 多处 SIGSEGV | 高 | P0 | UT-MP-006、008、009、010、011、020 |
+| DEF-MP-001 | 畸形 multipart 多处空指针解引用导致 SIGSEGV | 高 | P0 | UT-MP-006、008、009、010、011、019、020b |
 | DEF-MP-002 | 缺少最终 boundary 仍生成文件 | 中 | P1 | UT-MP-007 |
-| DEF-MP-003 | 超长文件名导致栈缓冲区溢出 | 严重 | P0 | UT-MP-016 |
-| DEF-MP-004 | filename 未做路径校验，可写出工作目录 | 严重 | P0 | UT-MP-017 |
-| DEF-MP-005 | 文件内容包含 boundary 字节时被误拒/可能静默截断 | 中 | P1 | UT-MP-018 |
-| DEF-MP-006 | `file_buf` 缺少 NUL 终止符导致 `strstr()` 越界读 | 严重（待阶段 5 确认） | P0 | UT-MP-001～020（全部触发） |
+| DEF-MP-003 | 字段长度不受限导致栈缓冲区溢出（5 处） | **严重** | P0 | UT-MP-016、021、022、023、024 |
+| DEF-MP-004 | filename 未做路径校验，可写出工作目录 | **严重** | P0 | UT-MP-017 |
+| DEF-MP-005 | 文件内容包含 boundary 字节时被错误拒绝 | 中 | P1 | UT-MP-018 |
+| DEF-MP-006 | `file_buf` 缺少 NUL 终止符导致 `strstr()` 越界读 | **严重** | P0 | UT-MP-006、007、008、009、010、011、012、019、020a、020b、020c |
+| DEF-MP-007 | `fread()` 返回值被截断，短读/失败后继续用未初始化缓冲区解析 | 高 | P0 | 全部用例（测试夹具修复后暴露） |
+| TEST-MP-001 | **测试夹具缺陷**：C 单元测试的输入通路从未生效 | —（测试侧，已修复） | — | 全部 UT-MP 用例 |
+
+判定口径：非法输入允许返回 `-1`，但不允许进程崩溃、写出沙箱、残留文件或发生未定义行为；Sanitizer 报告内存错误同样判为 NG。
 
 ---
 
@@ -26,46 +31,37 @@
 | 状态 | 已复现，待修复 |
 | 严重程度 | 高 |
 | 优先级 | P0 |
-| 关联用例 | UT-MP-006、UT-MP-008、UT-MP-009、UT-MP-010、UT-MP-011、UT-MP-020b、UT-MP-020c |
+| 关联用例 | UT-MP-006、UT-MP-008、UT-MP-009、UT-MP-010、UT-MP-011、UT-MP-019、UT-MP-020b |
 | 关联需求/风险 | R-12、RK-04、RK-10 |
-| 测试层次 | C 函数级单元测试 |
-| 证据 | `tests/backend/unit/results/multipart_stage4_20260915.log` 第 5 节 |
+| 测试层次 | C 函数级单元测试 + AddressSanitizer |
+| 证据 | `multipart_stage5_20260915.log` 第 5.2 节 |
 
-### 复现步骤
+### 实际结果（ASan 精确崩溃点）
 
-1. 在 `tc_fcgi_app` 中进入 `/app/tests/backend/unit`；
-2. 执行 `make clean && make test-multipart`；
-3. 观察上述用例的隔离子进程状态。
+| 用例 | 触发报文 | ASan 报告 | 崩溃位置 |
+|---|---|---|---|
+| UT-MP-006 | 去掉开头边界行 | SEGV | `upload_cgi.c:302` |
+| UT-MP-008 | 文件段去掉 `Content-Disposition` | SEGV | `upload_cgi.c:302` |
+| UT-MP-009 | 文件段去掉 `filename` | SEGV | `upload_cgi.c:302` |
+| UT-MP-010 | 缺少 `user` 字段 | SEGV | `upload_cgi.c:313` |
+| UT-MP-011 | 缺少 `md5` 字段 | SEGV | `upload_cgi.c:328` |
+| UT-MP-019 | 字段顺序改为 file→md5→user→size | SEGV | `upload_cgi.c:328` |
+| UT-MP-020b | 在文件内容处截断 | SEGV | `upload_cgi.c:309` |
 
-### 预期结果
+### 原因
 
-解析函数返回 `-1`，进程正常退出，不生成文件、不保留残留。
+`recv_save_file()` 对多个 `strstr()` 的返回值未判空，随后直接做指针偏移并再次解引用：
 
-### 实际结果
+- `upload_cgi.c:299` `p2 = strstr(p1, "filename=")` 无判空 → `300` 偏移 → `302` 的 `strstr(p2, "\"")` 解引用近似空地址（UT-MP-006/008/009）；
+- `upload_cgi.c:309` `p3 = strstr(..., "name=\"user\"")` 无判空 → `311` 偏移 → `313` 的 `trim_space_and_around(p3, buf_end)`（UT-MP-010、020b 的 `file_end` 为野指针）；
+- `upload_cgi.c:325` `p4 = strstr(end, "name=\"md5\"")` 无判空 → `326` 偏移 → `328` 的 `trim_space_and_around(p4, buf_end)`（UT-MP-011、019）；
+- 对照组：`upload_cgi.c:337` 对 `n`（`name="size"`）做了判空，因此 UT-MP-012 能安全拒绝——说明判空是缺失而不是有意设计。
 
-7 个隔离用例的子进程均收到 signal 11（SIGSEGV）：
+该缺陷与 DEF-MP-006 相互独立：即使缓冲区正确 NUL 终止，这些查找在字段确实缺失时仍然返回 `NULL`。
 
-| 用例 | 触发报文 |
-|---|---|
-| UT-MP-006 | 去掉开头的边界行 |
-| UT-MP-008 | 文件段去掉 `Content-Disposition` |
-| UT-MP-009 | 文件段去掉 `filename` |
-| UT-MP-010 | 整条报文缺少 `user` 字段 |
-| UT-MP-011 | 整条报文缺少 `md5` 字段 |
-| UT-MP-020b | 在文件内容中间截断 |
-| UT-MP-020c | 在 `size` 数值中间截断 |
+### 影响
 
-### 初步原因
-
-`recv_save_file()` 对多个 `strstr()` 及 `buffer_search()` 的返回值未判空，随后直接做指针加减或再次解引用：
-
-- `upload_cgi.c:299` `p2 = strstr(p1, "filename=")` 无判空，`upload_cgi.c:300` 直接 `p2 += strlen("filename=\"")`，当返回 `NULL` 时得到地址 9，`upload_cgi.c:302` 的 `strstr(p2, "\"")` 即段错误（UT-MP-006、008、009）；
-- `upload_cgi.c:309` `p3 = strstr(..., "name=\"user\"")` 无判空，`upload_cgi.c:311` 同样偏移后再交给 `trim_space_and_around()`（UT-MP-010、020b）；
-- `upload_cgi.c:325` `p4 = strstr(end, "name=\"md5\"")` 无判空（UT-MP-011）；
-- `upload_cgi.c:289` `file_end -= strlen("\r\n")` 未验证 `file_end` 足够靠后，内容处截断时指针回退到内容起点之前（UT-MP-020b、020c）。
-- 对照组：`upload_cgi.c:337` 对 `p5`（`name="size"`）做了判空，因此 UT-MP-012 能安全拒绝——说明判空是缺失而非有意设计。
-
-初步原因与 DEF-MP-006（缓冲区无 NUL 终止符）耦合：`strstr()` 在未终止缓冲区上的扫描结果本身不可靠。精确崩溃指令地址将在阶段 5 由 Sanitizer 给出。
+`recv_save_file()` 在 `upload_cgi.c:1067` 被直接调用，位于 `main()` 的 `FCGI_Accept()` 循环内，其之前没有任何 token 校验。因此**未认证的攻击者只需构造一段畸形的 multipart 报文即可让上传 CGI 进程崩溃**，属于拒绝服务。
 
 ---
 
@@ -78,73 +74,64 @@
 | 优先级 | P1 |
 | 关联用例 | UT-MP-007 |
 | 关联需求/风险 | R-12、RK-04 |
-| 测试层次 | C 函数级单元测试 |
-| 证据 | `tests/backend/unit/results/multipart_stage4_20260915.log` 第 5 节 |
-
-### 复现步骤
-
-1. 构造包含 file、user、md5、size 字段但没有最终 `boundary--` 的报文；
-2. 将报文重定向到标准输入并调用 `recv_save_file()`；
-3. 检查函数返回值和当前目录下的 `bad.bin`。
-
-### 预期结果
-
-返回 `-1`，且不生成文件。
+| 证据 | `multipart_stage5_20260915.log` 第 5.1 节 |
 
 ### 实际结果
 
-函数返回 `0`（未拒绝），并在当前工作目录生成了包含上传内容的 `bad.bin`。测试判定 `rc=2`，随后由测试清理逻辑删除该文件。
+函数返回 `0`（未拒绝），并在当前工作目录生成了包含上传内容的 `bad.bin`；测试判定 `rc=2`，随后由测试清理逻辑删除。ASan 另在 `upload_cgi.c:369`（`p6 = strstr(end, boundary)`）报告一处潜在越界读。
 
-### 初步原因
+### 原因
 
-解析流程只依赖 `buffer_search()` 找到的第一个 boundary 出现位置来计算 `file_end`（`upload_cgi.c:284`～`285`），没有在写文件之前验证结尾存在 `boundary + "--" + CRLF`（`upload_cgi.c:369`～`374` 的 `p6` 计算也未用于任何校验）。因此报文尾部是否是合法结束标志对结果没有影响，只要 `(file_end - file_start) == (*p_size)` 就落盘。
+解析流程只依赖 `buffer_search()` 找到的第一个 boundary 出现位置计算 `file_end`（`upload_cgi.c:284`～`285`），没有在写文件前验证结尾存在 `boundary + "--" + CRLF`。`upload_cgi.c:369`～`374` 计算出的 `p6` 未参与任何校验。只要 `(file_end - file_start) == (*p_size)` 就落盘。
 
 ---
 
-## DEF-MP-003：超长文件名导致栈缓冲区溢出
+## DEF-MP-003：字段长度不受限导致栈缓冲区溢出
 
 | 属性 | 内容 |
 |---|---|
 | 状态 | 已复现，待修复 |
-| 严重程度 | **严重**（建议） |
+| 严重程度 | **严重** |
 | 优先级 | P0 |
-| 关联用例 | UT-MP-016 |
+| 关联用例 | UT-MP-016、UT-MP-021、UT-MP-022、UT-MP-023、UT-MP-024 |
 | 关联需求/风险 | R-12、TC-N-004、RK-10 |
-| 测试层次 | C 函数级单元测试 |
-| 证据 | `tests/backend/unit/results/multipart_stage4_20260915.log` 第 5 节 |
+| 证据 | `multipart_stage5_20260915.log` 第 4、5.2 节 |
 
-### 复现步骤
+### 实际结果（ASan 直接定位）
 
-1. 构造合法 multipart 报文，把 `filename=` 的值替换为 1000 个 `a`；
-2. 使用与生产代码一致的 256 字节文件名缓冲区（`char filename[256]`，对应 `include/util_cgi.h:4` 的 `FILE_NAME_LEN`）；
-3. 将报文重定向到标准输入并调用 `recv_save_file()`。
+| 用例 | 超长字段 | 目标缓冲区 | ASan 报告 | 位置 |
+|---|---|---|---|---|
+| UT-MP-016 | `filename` 1000 字符 | `filename[FILE_NAME_LEN]`(256) | stack-buffer-overflow | `upload_cgi.c:303` |
+| UT-MP-021 | boundary 首行 606 字符 | `boundary[TEMP_BUF_MAX_LEN]`(512) | stack-buffer-overflow | `upload_cgi.c:270` |
+| UT-MP-022 | `user` 200 字符 | `user[USER_NAME_LEN]`(128) | stack-buffer-overflow | `upload_cgi.c:320` |
+| UT-MP-023 | `md5` 400 字符 | `md5[MD5_LEN]`(256) | stack-buffer-overflow | `upload_cgi.c:330` |
+| UT-MP-024 | `size` 文本 100 字符 | `size_text[64+1]`(65) | stack-buffer-overflow | `upload_cgi.c:352` |
 
-### 预期结果
+普通构建下的表现：
 
-返回 `-1`，进程不崩溃，不生成文件。
-
-### 实际结果
-
-子进程输出 `*** stack smashing detected ***: terminated`，随后收到 signal 6（SIGABRT）。测试判定 NG。本次运行未产生文件残留。
+- UT-MP-016 / 021 / 023：`*** stack smashing detected ***` 后 signal 6；
+- UT-MP-022：**未触发栈保护**，溢出静默改写相邻的 `filename` 缓冲区，被测函数用被改写的名字（72 个 `u`）创建了文件；
+- UT-MP-024：普通断言下返回 -1、无残留，**只有 ASan 能发现**它写越界了 `size_text`（多出的字节落进相邻的 `boundary` 缓冲区，没碰到 canary）。
 
 ### 原因
 
-`upload_cgi.c:303` 与 `304`：
+五处拷贝的长度都直接来自报文，没有任何上限判断：
 
 ```c
-strncpy(filename, p2, end-p2);
-filename[end-p2] = '\0';
+upload_cgi.c:270  strncpy(boundary,  begin, p1-begin);
+upload_cgi.c:303  strncpy(filename,  p2,   end-p2);
+upload_cgi.c:320  strncpy(user,      p3,   end-p3);
+upload_cgi.c:330  strncpy(md5,       p4,   end-p4);
+upload_cgi.c:352  strncpy(size_text, p5,   end-p5);
 ```
-
-`end - p2` 完全由请求报文中的 `filename` 字段长度决定，没有任何上限判断，也没有使用调用方缓冲区的容量（`FILE_NAME_LEN`）。当长度超过 256 时，`strncpy()` 与随后的写零都会越界写。生产调用方 `main()`（`upload_cgi.c:1029`）声明的正是 `char filename[FILE_NAME_LEN]`，缓冲区大小与测试一致，因此测试复现的是真实生产缺陷，不是测试自身缓冲区设置过小。
 
 ### 为什么定级为"严重"
 
-1. **写越界且长度可控**：越界长度由请求方完全控制，不是固定的小幅溢出，可以精确覆盖保存的寄存器与返回地址。
-2. **当前仅被栈保护拦下**：本次看到的是 `-fstack-protector` 生效后的 `stack smashing detected`。若构建未启用栈保护，或攻击者构造不触发 canary 校验的长度，该越界写即为远程代码执行原语。
-3. **未认证可达**：`recv_save_file()` 在 `upload_cgi.c:1067` 被直接调用，位于 `main()` 的 `FCGI_Accept()` 循环内，其之前没有任何 token 或用户校验（`upload_cgi.c:1039`～`1067`）。任何能向该 FastCGI 接口发送 POST 报文的一方都可触发。
-4. **触发条件平凡**：只需一个普通的 `filename` 字段，不需要构造畸形报文。
-5. **同类问题可能不止一处**：`upload_cgi.c:270` 的 `strncpy(boundary, begin, p1-begin)`、`upload_cgi.c:320` 的 `strncpy(user, p3, end-p3)`、`upload_cgi.c:330` 的 `strncpy(md5, p4, end-p4)`、`upload_cgi.c:352` 的 `strncpy(size_text, p5, end-p5)` 采用相同写法，`boundary`（512）、`user`（128）、`md5`（256）、`size_text`（65）四个缓冲区同样缺少长度上限，需在修复时一并处理。
+1. **写越界且长度由请求方完全控制**，可精确覆盖保存的寄存器与返回地址；
+2. **当前只是被栈保护偶然拦下**：UT-MP-022 已证明并非每次都能拦下，溢出会静默破坏相邻数据；未启用 `-fstack-protector` 的构建直接是远程代码执行原语；
+3. **未认证可达**：`recv_save_file()` 在任何鉴权之前执行；
+4. **触发条件平凡**：`user` 字段只需超过 128 字节，`size` 文本只需超过 65 字节；
+5. **五处同一模式**，必须一并修复。
 
 ---
 
@@ -153,27 +140,15 @@ filename[end-p2] = '\0';
 | 属性 | 内容 |
 |---|---|
 | 状态 | 已复现，待修复 |
-| 严重程度 | **严重**（建议） |
+| 严重程度 | **严重** |
 | 优先级 | P0 |
 | 关联用例 | UT-MP-017 |
 | 关联需求/风险 | R-12、TC-S-006、RK-10 |
-| 测试层次 | C 函数级单元测试 |
-| 证据 | `tests/backend/unit/results/multipart_stage4_20260915.log` 第 5 节 |
-
-### 复现步骤
-
-1. 在测试沙箱 `/tmp/upload_cgi_UT-MP-017` 中把工作目录切换过去；
-2. 构造合法 multipart 报文，`filename` 取值为 `../escaped_by_upload_test.txt`；
-3. 将报文重定向到标准输入并调用 `recv_save_file()`；
-4. 检查沙箱**父目录**`/tmp` 下是否出现文件。
-
-### 预期结果
-
-返回 `-1`；文件名中的路径分量被拒绝或规范化；文件不得出现在工作目录之外。
+| 证据 | `multipart_stage5_20260915.log` 第 5.2 节 |
 
 ### 实际结果
 
-函数返回 `0`（未拒绝），并在沙箱父目录 `/tmp` 下生成了 `escaped_by_upload_test.txt`，内容为上传的文件内容。测试判定 `rc=2`（越权落盘）。
+函数返回 `0`（未拒绝），并在沙箱父目录 `/tmp` 下生成了 `escaped_by_upload_test.txt`，内容为上传的文件内容。测试判定 `rc=2`（越权落盘）。该用例不产生任何内存安全报告，属于**逻辑缺陷**而非内存缺陷。
 
 ### 原因
 
@@ -183,18 +158,18 @@ filename[end-p2] = '\0';
 fd = open(filename, O_CREAT|O_WRONLY, 0644);
 ```
 
-`filename` 直接来自报文解析结果（`upload_cgi.c:303`～`304`），既没有做 `../`、`/` 等路径分量的过滤，也没有限定基准目录。`open()` 会原样解释相对路径，因此 `../` 可以把文件写到工作目录的任意上级目录；若请求方给出绝对路径（如 `/tmp/x`），同样会被直接接受。
+`filename` 直接来自报文解析结果（`upload_cgi.c:303`～`304`），既没有过滤 `../`、`/` 等路径分量，也没有限定基准目录。
 
 ### 为什么定级为"严重"
 
-1. **任意文件写入**：写入路径与文件名由请求方控制，可覆盖 FastCGI 进程有权写入的任意文件（服务自身的配置、脚本、临时目录等），是典型的路径穿越漏洞。
-2. **未认证可达**：与 DEF-MP-003 相同，`recv_save_file()` 在任何鉴权之前执行。
-3. **触发条件平凡**：只需在正常的 `filename` 字段中带上 `../`，不需要畸形报文。
+1. **任意文件写入**：路径与文件名由请求方控制，可覆盖 FastCGI 进程有权写入的任意文件；
+2. **未认证可达**：与 DEF-MP-003 相同；
+3. **触发条件平凡**：正常的 `filename` 字段中带上 `../` 即可。
 
 ### 复现边界与清理说明
 
 - **本次只在 Docker 容器 `tc_fcgi_app` 的 `/tmp` 测试沙箱中复现**，未在宿主机、未在业务工作目录、未对容器内其他路径做任何写入尝试。
-- 测试创建的 `/tmp/escaped_by_upload_test.txt` 已由测试代码显式 `unlink()` 删除；执行后复查容器，`/tmp` 下无该文件、无 `upload_cgi_*` 沙箱目录残留。清理只针对测试自身创建的明确路径，未执行递归删除。
+- 测试创建的 `/tmp/escaped_by_upload_test.txt` 已由测试代码显式 `unlink()` 删除；执行后复查容器，`/tmp` 下无该文件、无 `upload_cgi_*` 沙箱目录残留。清理只针对测试自身创建的明确路径。
 
 ---
 
@@ -207,42 +182,21 @@ fd = open(filename, O_CREAT|O_WRONLY, 0644);
 | 优先级 | P1 |
 | 关联用例 | UT-MP-018 |
 | 关联需求/风险 | R-01、RK-04 |
-| 测试层次 | C 函数级单元测试 |
-| 证据 | `tests/backend/unit/results/multipart_stage4_20260915.log` 第 5 节 |
-
-### 复现步骤
-
-1. 构造一条完全合法的 multipart 报文，声明 `size` 与实际内容长度一致；
-2. 把文件内容设为 `prefix` + 边界字符串 + `suffix`（即内容字节中恰好含有与 boundary 相同的字节串，但**不出现在行首**，因此不构成 MIME 分隔符）；
-3. 将报文重定向到标准输入并调用 `recv_save_file()`。
-
-### 预期结果
-
-报文合法，应正常解析并落盘，文件内容与原始字节逐字节一致。
+| 证据 | `multipart_stage5_20260915.log` 第 5.2 节 |
 
 ### 实际结果
 
-`recv_save_file()` 返回 `-1`，解析失败，文件未生成（测试判定 `rc=1`）。
+`recv_save_file()` 返回 `-1`，解析失败，文件未生成（`rc=1`）。无任何内存安全报告。
 
 ### 原因
 
-`upload_cgi.c:285`：
-
-```c
-file_end = buffer_search(file_start, buf_end - file_start, boundary, strlen(boundary));
-```
-
-`buffer_search()` 在剩余缓冲区中做逐字节 `memcmp`，在**任意位置**匹配 boundary，而不要求它出现在行首（MIME 规定分隔符必须位于 `CRLF` 之后）。内容中出现相同字节串时，`file_end` 被提前定位到内容内部；又因为 `upload_cgi.c:289` 无条件执行 `file_end -= strlen("\r\n")`，最终 `(file_end - file_start)` 与声明 `size` 不一致，触发 `upload_cgi.c:377` 的长度校验失败并返回 `-1`。
+`upload_cgi.c:285` 的 `buffer_search()` 在剩余缓冲区中做逐字节 `memcmp`，在**任意位置**匹配 boundary，而不要求它位于行首（MIME 规定分隔符必须在 `CRLF` 之后）。内容中出现相同字节串时 `file_end` 被提前定位；又因为 `upload_cgi.c:289` 无条件执行 `file_end -= strlen("\r\n")`，最终长度与声明 `size` 不一致，触发 `upload_cgi.c:377` 的长度校验失败。
 
 ### 影响
 
-- **当前失败模式是 fail-closed（明确拒绝）**，不会静默落盘错误内容，因此不构成安全漏洞；
+- 当前失败模式是 fail-closed（明确拒绝），不构成安全漏洞；
 - 但报文本身合法，拒绝即造成正常上传失败，属于解析正确性缺陷；
-- **潜在的数据完整性问题**：如果请求方构造的内容恰好使"误定位后的长度"等于声明的 `size`，长度校验会通过，`upload_cgi.c:403`～`404` 的 `ftruncate()` + `write()` 将只写入被截断的前半段内容，即**静默截断并落盘损坏文件**（对应 RK-02"文件损坏"）。因此该缺陷不只是"误拒"，需要在修复时按 MIME 规则改为"行首匹配"并显式校验长度。
-
-### 为什么定级为"中"
-
-触发需要在文件内容中出现与 boundary 完全相同的字节串。浏览器/前端通常使用随机 boundary，自然发生的概率低；但该行为不符合 MIME 解析规则，且叠加静默截断的风险，需要修复。
+- **潜在数据完整性问题**：若请求方构造的内容恰好使"误定位后的长度"等于声明 `size`，长度校验会通过，`upload_cgi.c:403`～`404` 的 `ftruncate()` + `write()` 将只写入被截断的前半段内容，即**静默截断并落盘损坏文件**（对应 RK-02"文件损坏"）。
 
 ---
 
@@ -250,57 +204,119 @@ file_end = buffer_search(file_start, buf_end - file_start, boundary, strlen(boun
 
 | 属性 | 内容 |
 |---|---|
-| 状态 | 已初步复现，待阶段 5 完整确认 |
-| 严重程度 | **严重**（建议，待阶段 5 确认） |
+| 状态 | 已复现，待修复 |
+| 严重程度 | **严重** |
 | 优先级 | P0 |
-| 关联用例 | UT-MP-001～UT-MP-020（Sanitizer 构建下 24 / 24 全部触发） |
+| 关联用例 | UT-MP-006、007、008、009、010、011、012、019、020a、020b、020c |
 | 关联需求/风险 | R-12、RK-04 |
 | 测试层次 | C 函数级单元测试 + AddressSanitizer |
-| 证据 | `tests/backend/unit/results/raw_sanitize_preview_20260915.log` |
-
-### 复现步骤
-
-1. 在 `tc_fcgi_app` 中执行 `make sanitize`；
-2. 执行 `ASAN_OPTIONS=detect_leaks=0 ./test_recv_save_file_sanitize`；
-3. 观察每个隔离子进程的 Sanitizer 报告。
-
-### 预期结果
-
-解析合法报文时不产生任何 Sanitizer 报告。
+| 证据 | `multipart_stage5_20260915.log` 第 5.1、5.2 节 |
 
 ### 实际结果
 
-24 个隔离子进程**全部**被 AddressSanitizer 中止，错误类型均为 `heap-buffer-overflow`（越界读）。24 次报告的唯一栈帧组合一致：
+`upload_cgi.c:230` 用 `malloc(len)` 精确分配 `len` 字节，`upload_cgi.c:237` 读入 `len` 字节后**没有写入 `'\0'` 终止符**，紧接着 `upload_cgi.c:261` 起对该缓冲区调用 `strstr()`。
 
-```text
-#2 ... in recv_save_file ../../../src_cgi/upload_cgi.c:261   （使用点）
-allocated by thread T0 here:
-#1 ... in recv_save_file ../../../src_cgi/upload_cgi.c:230   （分配点）
-SUMMARY: AddressSanitizer: heap-buffer-overflow ... in StrstrCheck
-```
+ASan 在 11 条用例上报告 `heap-buffer-overflow`，**分配点全部是 `upload_cgi.c:230`**，使用点各不相同：
 
-注意：**正常报文用例 UT-MP-001 同样触发**，说明该问题与报文是否畸形无关。
+| 使用点 | 说明 | 用例 |
+|---|---|---|
+| `:275` | `strstr(begin, "Content-Type:")` | UT-MP-020a |
+| `:284` | `buffer_search(file_start, ..., boundary, ...)` 前的边界定位 | UT-MP-006、020b |
+| `:299` | `strstr(p1, "filename=")` | UT-MP-008、009 |
+| `:309` | `strstr(file_end + strlen(boundary), "name=\"user\"")` | UT-MP-010 |
+| `:325` | `strstr(end, "name=\"md5\"")` | UT-MP-011、019 |
+| `:336` | `strstr(end, "name=\"size\"")` | UT-MP-012 |
+| `:351` | `strstr(p5, "\r\n")` | UT-MP-020c |
+| `:369` | `strstr(end, boundary)` | UT-MP-007 |
+
+### 这些越界是真实的，不是插桩假象
+
+关掉 ASan 的 `strstr` 前置检查（`intercept_strstr=0`，即使用 libc 真正的 `strstr`）后重新执行，仍有 **7 条用例报 SIGSEGV**（UT-MP-006/008/009/010/011/019/020b），另有 UT-MP-020c 在 `:352` 的 `strncpy()` 处真实读越界。说明当查找串在缓冲区内不存在时，真实的 `strstr` 会一路扫描到分配区域之外。
+
+UT-MP-007、UT-MP-012、UT-MP-020a 只在有前置检查时报告：它们的查找串在缓冲区内提前命中，扫描没有跑到边界之外。这仍违反 `strstr` 的 NUL 终止契约，是否越界取决于报文内容，属于**不确定行为**。
+
+### 为什么定级为"严重"
+
+1. 影响**所有请求**（合法报文同样会在 `:261` 处调用 `strstr`），不是边界场景；
+2. 越界扫描的终点由堆上相邻内存决定，可能读取敏感内存、也可能触发段错误；
+3. 它是 DEF-MP-001 之外的一类根因缺陷，修复优先级不低于逐个补判空。
+
+---
+
+## DEF-MP-007：`fread()` 返回值被截断，短读后继续用未初始化缓冲区解析
+
+| 属性 | 内容 |
+|---|---|
+| 状态 | 已复现，待修复 |
+| 严重程度 | 高 |
+| 优先级 | P0 |
+| 关联用例 | 影响全部 UT-MP 用例的错误处理路径（由测试夹具修复后暴露） |
+| 关联需求/风险 | R-12、RK-04 |
+| 测试层次 | C 函数级单元测试（探针观测） |
+| 证据 | `multipart_stage5_20260915.log` 第 2 节 |
+
+### 复现步骤
+
+1. 在单元测试进程中重定向标准输入后调用 `recv_save_file()`；
+2. 用 `probe_fcgi_stdin.c` 观察 `FCGI_fread()` 的返回值与被测函数的实际读取量。
+
+### 实际结果
+
+`FCGI_fread()` 返回 `(size_t)-1`（即 `SIZE_MAX`）时，`upload_cgi.c:237` 把它截断成 `int ret2 == -1`，而错误分支条件是 `if (ret2 == 0)`，**永不成立**。函数继续执行，`file_buf` 保持 `malloc()` 出来的未初始化内容，后续所有解析都作用在随机数据上。
 
 ### 原因
 
-`upload_cgi.c:230`：
-
 ```c
-file_buf = (char *)malloc(len);
+upload_cgi.c:237   int ret2 = fread(file_buf, 1, len, stdin);
+upload_cgi.c:238   if(ret2 == 0) { ret = -1; goto END; }
 ```
 
-`upload_cgi.c:237` 用 `fread(file_buf, 1, len, stdin)` 精确读入 `len` 字节，之后**没有写入 `'\0'` 终止符**；紧接着 `upload_cgi.c:261` 起就对该缓冲区调用 `strstr()`。C 标准要求 `strstr()` 的实参是 NUL 终止字符串，因此该调用属于越界读：当查找串在缓冲区中不存在时，`strstr()` 会持续向后扫描直到偶然遇到 `'\0'`，读取长度不受 `len` 约束。
+两处问题叠加：
 
-`upload_cgi.c:261`、`275`、`281`、`284`、`299`、`302`、`309`、`325`、`336`、`351`、`369` 处对 `file_buf` 的全部 `strstr()` 调用都受同一问题影响。这也解释了为什么 DEF-MP-001 的崩溃点集中在这些 `strstr()` 上。
+1. `fread()` 的返回值是 `size_t`，被赋给 `int`；失败值 `(size_t)-1` 截断为 `-1`，而判断只覆盖"恰好读到 0 字节"；
+2. 只要返回值不是 0（包括失败值的 -1、以及任何**短读**，例如只读到 `len-100` 字节），检查就通过，缓冲区尾部的 `len - ret2` 字节仍是未初始化内存。
 
-### 为什么建议定级为"严重"
+在真实 FastCGI 运行环境中 `FCGI_Accept()` 会设置好 `stdio_stream`，但**短读**路径依然存在：客户端声明的 `CONTENT_LENGTH` 大于实际发送的字节数时，函数会用未初始化内存继续解析，并把 `filename` 等字段交给 `open()`。
 
-1. 这是**所有请求**（含正常上传）都会进入的路径，不是边界场景；
-2. 越界读的终点由堆上相邻内存的内容决定，行为不可预测，可能读取敏感内存或触发段错误；
-3. 它是 DEF-MP-001 多个 SIGSEGV 的公共诱因，属根因类缺陷，修复优先级高于逐个补判空。
+### 影响
 
-### 待确认项（阶段 5）
+- 未初始化内存被当作报文解析，属于 CWE-457（Use of Uninitialized Variable）；
+- 解析出的 `filename` 直接用于 `open(filename, O_CREAT|O_WRONLY, 0644)`，与 DEF-MP-004 叠加可造成**以随机/受控名字创建文件**；
+- 正确写法应为 `if (ret2 != len)`，且 `ret2` 应声明为 `size_t`。
 
-- 该报告的完整分类与源码级定位；
-- 在修复 DEF-MP-006 后，DEF-MP-001 的 7 个崩溃用例是否仍然崩溃（用于区分"根因"与"独立缺陷"）；
-- `strncpy(boundary, ...)`、`strncpy(user, ...)`、`strncpy(md5, ...)`、`strncpy(size_text, ...)` 等同类无长度上限拷贝的 Sanitizer 确认。
+---
+
+## TEST-MP-001：C 单元测试的输入通路从未生效（测试夹具缺陷，已修复）
+
+| 属性 | 内容 |
+|---|---|
+| 状态 | **已修复**（只改测试夹具，未改业务源码） |
+| 性质 | 测试侧缺陷，不是产品缺陷 |
+| 影响范围 | 阶段 2/3/4 中所有 `recv_save_file()` 用例的结论有效性 |
+| 证据 | `multipart_stage5_20260915.log` 第 2、3 节 |
+
+### 现象
+
+`upload_cgi.c` 包含的 `fcgi_stdio.h` 会把 `stdin` 替换为 `FCGI_stdin`（`&_fcgi_sF[0]`）、把 `fread` 替换为 `FCGI_fread`。测试进程从不调用 `FCGI_Accept()`，因此 `_fcgi_sF[0].stdio_stream` 始终是 `NULL`，`FCGI_fread()` 直接返回 `(size_t)-1`，**一个字节都没有读**。
+
+### 为什么会"通过"
+
+`recv_save_file()` 的读失败检查因 DEF-MP-007 永不触发，函数改用 `malloc(len)` 的未初始化内存继续解析。测试夹具在此之前刚用 `fprintf` 写过同一份报文并 `fclose`，其 `FILE*` 缓冲区被释放后很可能正好被这次 `malloc(len)` 复用——解析于是"读到"了正确的报文。Sanitizer 构建使用不同的分配器，复用不成立，同一个用例立刻给出相反结果。
+
+### 修复
+
+在 `multipart_fixture.c` 中新增 `multipart_bind_fcgi_stdin()`，由 `multipart_redirect_stdin()` 自动调用，把 libfcgi 的包装指向真正的 `stdin`：
+
+```c
+typedef struct { FILE *stdio_stream; void *fcgx_stream; } fixture_fcgi_file;
+extern fixture_fcgi_file _fcgi_sF[];
+
+void multipart_bind_fcgi_stdin(void) { _fcgi_sF[0].stdio_stream = stdin; }
+```
+
+### 修复带来的结论修正
+
+- 阶段 4 统计由 5 OK / 10 NG 修正为 **4 OK / 11 NG**；
+- **UT-MP-019（字段乱序）由假通过改为 NG**：真实拿到报文后会走到 `p4 = strstr(end, "name=\"md5\"")`，乱序时返回 `NULL`，随后 `:328` 段错误；
+- 其余用例判定不变；
+- 修复后普通构建与 Sanitizer 构建的逐用例判定完全一致。
