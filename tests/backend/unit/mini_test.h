@@ -74,6 +74,8 @@ static int g_fail = 0;
     } while (0)
 
 #define SUMMARY() do {                                                        \
+        unlink(CHILD_RC_FILE);                                                \
+        unlink(CHILD_KV_FILE);                                                \
         printf("\n================== SUMMARY ==================\n");           \
         printf("  PASS: %d    FAIL: %d    TOTAL: %d\n",                       \
                g_pass, g_fail, g_pass + g_fail);                              \

@@ -1,3 +1,4 @@
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,45 +38,61 @@ typedef struct {
  * 只有固定且可预测的路径才能让父进程在 RUN_ISOLATED 之后兜底回收。
  */
 static void case_paths(const char *case_id,
-                       const char *output_name,
                        char *sandbox,
                        size_t sandbox_size,
                        char *request,
-                       size_t request_size,
-                       char *output,
-                       size_t output_size)
+                       size_t request_size)
 {
     snprintf(sandbox, sandbox_size, "/tmp/upload_cgi_%s", case_id);
     snprintf(request, request_size, "%s/request.bin", sandbox);
-    snprintf(output, output_size, "%s/%s", sandbox, output_name);
 }
 
-/* 父子进程都可调用；即使用例崩溃，父进程仍能按固定路径清理沙箱。 */
-static void cleanup_case(const char *case_id, const char *output_name)
+/*
+ * 清理本用例自己的沙箱目录。
+ *
+ * 不能只按固定文件名 unlink：UT-MP-022 的栈溢出会改写调用方的文件名缓冲区，
+ * 被测函数可能以完全不同的名字落盘。因此这里只在本用例自己的沙箱目录
+ * /tmp/upload_cgi_<用例ID> 内逐个 unlink **普通文件**，随后 rmdir；
+ * 不递归进入子目录，也不触碰沙箱之外的任何路径。
+ *
+ * 父子进程都可调用；即使用例崩溃，父进程仍能按固定路径回收沙箱。
+ */
+static void cleanup_case(const char *case_id)
 {
     char sandbox[256];
     char request[320];
-    char output[320];
-    case_paths(case_id, output_name, sandbox, sizeof(sandbox),
-               request, sizeof(request), output, sizeof(output));
-    unlink(request);
-    unlink(output);
+    DIR *dir;
+    struct dirent *entry;
+
+    case_paths(case_id, sandbox, sizeof(sandbox), request, sizeof(request));
+
+    dir = opendir(sandbox);
+    if (dir) {
+        while ((entry = readdir(dir)) != NULL) {
+            char path[512];
+            struct stat st;
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+                continue;
+            snprintf(path, sizeof(path), "%s/%s", sandbox, entry->d_name);
+            if (lstat(path, &st) == 0 && S_ISREG(st.st_mode))
+                unlink(path);
+        }
+        closedir(dir);
+    }
     rmdir(sandbox);
 }
 
 static void cleanup_malformed_case(const char *case_id)
 {
-    cleanup_case(case_id, "bad.bin");
+    cleanup_case(case_id);
 }
 
-static int prepare_case(const char *case_id, const char *output_name)
+static int prepare_case(const char *case_id)
 {
     char sandbox[256];
     char request[320];
-    char output[320];
-    case_paths(case_id, output_name, sandbox, sizeof(sandbox),
-               request, sizeof(request), output, sizeof(output));
-    cleanup_case(case_id, output_name);
+    case_paths(case_id, sandbox, sizeof(sandbox), request, sizeof(request));
+    cleanup_case(case_id);
     if (mkdir(sandbox, 0700) != 0) return -1;
     if (chdir(sandbox) != 0) return -1;
     return 0;
@@ -83,13 +100,20 @@ static int prepare_case(const char *case_id, const char *output_name)
 
 static int prepare_malformed_case(const char *case_id)
 {
-    return prepare_case(case_id, "bad.bin");
+    return prepare_case(case_id);
 }
 
-static int run_rejected_options(const char *case_id,
-                                const multipart_body_options *options,
+/*
+ * 通用畸形用例驱动：报文各字段与 boundary 均可自定义。
+ * 返回值语义同 run_valid_case：0 表示"按要求安全拒绝且无残留"。
+ */
+static int run_rejected_message(const char *case_id,
+                                const char *user,
+                                const char *md5,
                                 const char *filename,
-                                long declared_size)
+                                long declared_size,
+                                const char *boundary,
+                                const multipart_body_options *options)
 {
     static const unsigned char content[] = "abcde";
     char parsed_user[USER_NAME_LEN] = {0};
@@ -103,8 +127,8 @@ static int run_rejected_options(const char *case_id,
     if (prepare_malformed_case(case_id) != 0) return 90;
     body_size = multipart_write_body_with_options(
         "request.bin", content, sizeof(content) - 1,
-        "alice", "ab56b4d92b40713acc5af89985d4b786", filename, declared_size,
-        NULL, options);
+        user, md5, filename, declared_size,
+        boundary, options);
     if (body_size < 0) return 91;
     if (multipart_redirect_stdin("request.bin") != 0) return 92;
 
@@ -117,6 +141,16 @@ static int run_rejected_options(const char *case_id,
     unlink(filename);
     if (chdir("/tmp") == 0) cleanup_malformed_case(case_id);
     return rc;
+}
+
+static int run_rejected_options(const char *case_id,
+                                const multipart_body_options *options,
+                                const char *filename,
+                                long declared_size)
+{
+    return run_rejected_message(case_id, "alice",
+                                "ab56b4d92b40713acc5af89985d4b786",
+                                filename, declared_size, NULL, options);
 }
 
 static int run_malformed_options(const char *case_id,
@@ -167,7 +201,7 @@ static int run_valid_case(const valid_case *item)
     int result;
     int rc = 0;
 
-    if (prepare_case(item->case_id, item->filename) != 0) return 90;
+    if (prepare_case(item->case_id) != 0) return 90;
 
     body_size = multipart_write_body("request.bin",
                                      item->content,
@@ -204,7 +238,7 @@ static int run_valid_case(const valid_case *item)
 CLEANUP:
     unlink("request.bin");
     unlink(item->filename);
-    if (chdir("/tmp") == 0) cleanup_case(item->case_id, item->filename);
+    if (chdir("/tmp") == 0) cleanup_case(item->case_id);
     return rc;
 }
 
@@ -406,6 +440,67 @@ static int test_reordered_metadata_fields(void)
     return run_malformed_raw("UT-MP-019", body, sizeof(body) - 1);
 }
 
+/*
+ * UT-MP-021：boundary 行超过 TEMP_BUF_MAX_LEN(512)。
+ * upload_cgi.c:270 的 strncpy(boundary, begin, p1-begin) 没有长度上限，
+ * 首行长度完全由请求方决定，应当安全拒绝而不是破坏栈。
+ */
+static int test_overlong_boundary_line(void)
+{
+    multipart_body_options options = multipart_default_options();
+    static char boundary[607];
+    memset(boundary, '-', sizeof(boundary) - 1);
+    boundary[sizeof(boundary) - 1] = '\0';
+    return run_rejected_message("UT-MP-021", "alice",
+                                "ab56b4d92b40713acc5af89985d4b786",
+                                "bad.bin", 5, boundary, &options);
+}
+
+/*
+ * UT-MP-022：user 值超过 USER_NAME_LEN(128)。
+ * upload_cgi.c:320 的 strncpy(user, p3, end-p3) 没有长度上限。
+ */
+static int test_overlong_user_value(void)
+{
+    multipart_body_options options = multipart_default_options();
+    static char user[201];
+    memset(user, 'u', sizeof(user) - 1);
+    user[sizeof(user) - 1] = '\0';
+    return run_rejected_message("UT-MP-022", user,
+                                "ab56b4d92b40713acc5af89985d4b786",
+                                "bad.bin", 5, NULL, &options);
+}
+
+/*
+ * UT-MP-023：md5 值超过 MD5_LEN(256)。
+ * upload_cgi.c:330 的 strncpy(md5, p4, end-p4) 没有长度上限。
+ */
+static int test_overlong_md5_value(void)
+{
+    multipart_body_options options = multipart_default_options();
+    static char md5[401];
+    memset(md5, 'a', sizeof(md5) - 1);
+    md5[sizeof(md5) - 1] = '\0';
+    return run_rejected_message("UT-MP-023", "alice", md5,
+                                "bad.bin", 5, NULL, &options);
+}
+
+/*
+ * UT-MP-024：size 文本超过 size_text[64+1]。
+ * upload_cgi.c:352 的 strncpy(size_text, p5, end-p5) 没有长度上限。
+ */
+static int test_overlong_size_text(void)
+{
+    multipart_body_options options = multipart_default_options();
+    static char size_text[101];
+    memset(size_text, '9', sizeof(size_text) - 1);
+    size_text[sizeof(size_text) - 1] = '\0';
+    options.size_text_override = size_text;
+    return run_rejected_message("UT-MP-024", "alice",
+                                "ab56b4d92b40713acc5af89985d4b786",
+                                "bad.bin", 5, NULL, &options);
+}
+
 static int test_truncated_after_opening_boundary(void)
 {
     static const unsigned char body[] =
@@ -444,24 +539,24 @@ int main(void)
 {
     CASE("UT-MP-001: 正常文本 multipart 报文");
     RUN_ISOLATED("normal text multipart", test_normal_text_multipart);
-    cleanup_case("UT-MP-001", "note.txt");
+    cleanup_case("UT-MP-001");
 
     CASE("UT-MP-002: 文件内容包含二进制零字节");
     RUN_ISOLATED("binary content", test_binary_content_with_zero_bytes);
-    cleanup_case("UT-MP-002", "binary.dat");
+    cleanup_case("UT-MP-002");
 
     CASE("UT-MP-003: 中文和空格文件名");
     RUN_ISOLATED("unicode filename", test_chinese_and_space_filename);
-    cleanup_case("UT-MP-003", "我的 文档-1.txt");
+    cleanup_case("UT-MP-003");
 
     CASE("UT-MP-004: 0 字节文件当前行为基线");
     NOTE("当前需求未最终确认；本测试记录实际行为，并检查进程安全与文件残留");
     RUN_ISOLATED("zero-byte file", test_zero_byte_file_current_baseline);
-    cleanup_case("UT-MP-004", "empty.bin");
+    cleanup_case("UT-MP-004");
 
     CASE("UT-MP-005: 声明大小与实际内容一致");
     RUN_ISOLATED("declared size matches", test_declared_size_matches_content);
-    cleanup_case("UT-MP-005", "size-check.bin");
+    cleanup_case("UT-MP-005");
 
     CASE("UT-MP-006: 缺少起始 boundary");
     RUN_ISOLATED("missing opening boundary", test_missing_opening_boundary);
@@ -518,7 +613,7 @@ int main(void)
 
     CASE("UT-MP-018: 文件内容包含 boundary 字节");
     RUN_ISOLATED("boundary bytes inside content", test_boundary_bytes_inside_content);
-    cleanup_case("UT-MP-018", "boundary-content.bin");
+    cleanup_case("UT-MP-018");
 
     CASE("UT-MP-019: 元数据字段顺序变化");
     RUN_ISOLATED("reordered metadata fields", test_reordered_metadata_fields);
@@ -532,6 +627,22 @@ int main(void)
     cleanup_malformed_case("UT-MP-020b");
     RUN_ISOLATED("truncated in size value", test_truncated_in_size_value);
     cleanup_malformed_case("UT-MP-020c");
+
+    CASE("UT-MP-021: 超长 boundary 行");
+    RUN_ISOLATED("overlong boundary line", test_overlong_boundary_line);
+    cleanup_malformed_case("UT-MP-021");
+
+    CASE("UT-MP-022: 超长 user 值");
+    RUN_ISOLATED("overlong user value", test_overlong_user_value);
+    cleanup_malformed_case("UT-MP-022");
+
+    CASE("UT-MP-023: 超长 md5 值");
+    RUN_ISOLATED("overlong md5 value", test_overlong_md5_value);
+    cleanup_malformed_case("UT-MP-023");
+
+    CASE("UT-MP-024: 超长 size 文本");
+    RUN_ISOLATED("overlong size text", test_overlong_size_text);
+    cleanup_malformed_case("UT-MP-024");
 
     SUMMARY();
 }

@@ -21,11 +21,19 @@ SANITIZE_BUFFER_TARGET := test_buffer_search_sanitize
 SANITIZE_MULTIPART_TARGET := test_recv_save_file_sanitize
 SANITIZE_UPLOAD_OBJECT := upload_cgi_testable_sanitize.o
 
+# 阶段 5 分析工具（观测 recv_save_file 的可观测行为，不是回归用例）
+ANALYZE_TARGET := analyze_recv_save_file
+SANITIZE_ANALYZE_TARGET := analyze_recv_save_file_sanitize
+PROBE_TARGET := probe_fcgi_stdin
+SANITIZE_PROBE_TARGET := probe_fcgi_stdin_sanitize
+
 TARGETS := $(BUFFER_TARGET) $(MULTIPART_TARGET)
 SANITIZE_TARGETS := $(SANITIZE_BUFFER_TARGET) $(SANITIZE_MULTIPART_TARGET)
+ANALYSIS_TARGETS := $(ANALYZE_TARGET) $(PROBE_TARGET)
 
 .PHONY: all test test-buffer test-multipart \
-        sanitize test-sanitize test-buffer-sanitize test-multipart-sanitize clean
+        sanitize test-sanitize test-buffer-sanitize test-multipart-sanitize \
+        analyze analyze-sanitize probe probe-sanitize clean
 
 all: $(TARGETS)
 
@@ -81,5 +89,43 @@ test-multipart-sanitize: $(SANITIZE_MULTIPART_TARGET)
 
 test-sanitize: test-buffer-sanitize test-multipart-sanitize
 
+# ---------- 阶段 5 分析工具 ----------
+# 只用于观测行为，不参与 make test / make test-sanitize 的通过判定。
+
+$(ANALYZE_TARGET): analyze_recv_save_file.c multipart_fixture.c \
+		$(UPLOAD_OBJECT) multipart_fixture.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) analyze_recv_save_file.c multipart_fixture.c \
+		$(UPLOAD_OBJECT) $(LDFLAGS) $(LDLIBS) -o $@
+
+$(SANITIZE_ANALYZE_TARGET): analyze_recv_save_file.c multipart_fixture.c \
+		$(SANITIZE_UPLOAD_OBJECT) multipart_fixture.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SANITIZE_FLAGS) \
+		analyze_recv_save_file.c multipart_fixture.c \
+		$(SANITIZE_UPLOAD_OBJECT) $(LDFLAGS) $(LDLIBS) -o $@
+
+analyze: $(ANALYZE_TARGET)
+	./$(ANALYZE_TARGET)
+
+analyze-sanitize: $(SANITIZE_ANALYZE_TARGET)
+	./$(SANITIZE_ANALYZE_TARGET)
+
+# 探针：观测 libfcgi 包装层是否真的把重定向后的标准输入交给被测函数
+$(PROBE_TARGET): probe_fcgi_stdin.c multipart_fixture.c multipart_fixture.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) probe_fcgi_stdin.c multipart_fixture.c \
+		$(LDFLAGS) $(LDLIBS) -o $@
+
+$(SANITIZE_PROBE_TARGET): probe_fcgi_stdin.c multipart_fixture.c multipart_fixture.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SANITIZE_FLAGS) \
+		probe_fcgi_stdin.c multipart_fixture.c \
+		$(LDFLAGS) $(LDLIBS) -o $@
+
+probe: $(PROBE_TARGET)
+	./$(PROBE_TARGET)
+
+probe-sanitize: $(SANITIZE_PROBE_TARGET)
+	./$(SANITIZE_PROBE_TARGET)
+
 clean:
-	rm -f $(TARGETS) $(SANITIZE_TARGETS) $(UPLOAD_OBJECT) $(SANITIZE_UPLOAD_OBJECT)
+	rm -f $(TARGETS) $(SANITIZE_TARGETS) $(ANALYSIS_TARGETS) \
+		$(SANITIZE_ANALYZE_TARGET) $(SANITIZE_PROBE_TARGET) \
+		$(UPLOAD_OBJECT) $(SANITIZE_UPLOAD_OBJECT)

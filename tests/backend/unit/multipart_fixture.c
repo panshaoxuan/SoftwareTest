@@ -113,6 +113,24 @@ long multipart_write_body(const char *path,
                                              &options);
 }
 
+/*
+ * 与 fcgi_stdio.h 中 FCGI_FILE 的布局一致：两个指针。
+ * 这里不直接包含 fcgi_stdio.h，因为它会把 fopen/fread/printf 全部宏替换掉，
+ * 夹具自身的文件读写就会被 libfcgi 包装接管。
+ */
+typedef struct {
+    FILE *stdio_stream;
+    void *fcgx_stream;
+} fixture_fcgi_file;
+
+/* libfcgi 导出的 FCGI_FILE 数组，_fcgi_sF[0] 即 FCGI_stdin。 */
+extern fixture_fcgi_file _fcgi_sF[];
+
+void multipart_bind_fcgi_stdin(void)
+{
+    _fcgi_sF[0].stdio_stream = stdin;
+}
+
 int multipart_redirect_stdin(const char *path)
 {
     int fd = open(path, O_RDONLY);
@@ -123,6 +141,8 @@ int multipart_redirect_stdin(const char *path)
     }
     close(fd);
     clearerr(stdin);
+    /* 被测函数经 libfcgi 包装读取，必须同时把包装指向真正的 stdin。 */
+    multipart_bind_fcgi_stdin();
     return 0;
 }
 
